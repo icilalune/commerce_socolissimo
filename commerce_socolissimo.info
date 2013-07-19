@@ -1,0 +1,9 @@
+name = Commerce SOColissimo
+core = 7.x
+
+package = Commerce (shipping)
+
+dependencies[] = commerce
+dependencies[] = commerce_shipping
+
+files[] = commerce_socolissimo.api.inc

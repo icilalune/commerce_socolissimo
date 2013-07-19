@@ -1,0 +1,440 @@
+<?php
+
+
+/**
+ * @file
+ * module main file
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function commerce_socolissimo_menu() {
+
+    $items['socolissimo/frame/%'] = array(
+        'page callback' => 'commerce_socolissimo_frame_redirect_form',
+        'page arguments' => array(2),
+        'access arguments' => array('access checkout'),
+        'type' => MENU_CALLBACK,
+    );
+
+    $items['socolissimo/return'] = array(
+        'page callback' => 'commerce_socolissimo_return',
+        //TODO check order's access
+        'access arguments' => array('access checkout'),
+        'type' => MENU_CALLBACK,
+    );
+
+    foreach (commerce_shipping_services('socolissimo') as $name => $shipping_service) {
+        // Convert underscores to hyphens for the menu item argument.
+        $service_name_arg = 'socolissimo-' . strtr($name, '_', '-');
+
+
+        $items['admin/commerce/config/shipping/services/' . $service_name_arg . '/edit'] = array(
+            'title' => 'Edit',
+            'description' => 'Edit the service.',
+            'page callback' => 'drupal_get_form',
+            'page arguments' => array('commerce_socolissimo_service_edit_page', $name),
+            'access callback' => 'commerce_socolissimo_service_access',
+            'access arguments' => array('update'),
+            'type' => MENU_LOCAL_TASK,
+            'context' => MENU_CONTEXT_INLINE,
+            'weight' => 0,
+            'file' => 'commerce_socolissimo.admin.inc',
+        );
+
+
+    }
+
+    return $items;
+}
+
+function commerce_socolissimo_service_access($op) {
+  //TODO introduce a specific permission for socolissimo shipping service.
+  // || user_access('administer flat rate services')
+  return user_access('administer shipping') ;
+}
+
+/**
+ * Implements hook_commerce_shipping_method_info().
+ */
+function commerce_socolissimo_commerce_shipping_method_info() {
+    return array(
+        'socolissimo' => array(
+            'title' => 'So Colissimo',
+        ),
+    );
+}
+
+/**
+ * Implements hook_commerce_shipping_service_info().
+ */
+function commerce_socolissimo_commerce_shipping_service_info() {
+    $shipping_services = array();
+
+    $shipping_services['socolissimo_simplicite'] = array(
+        'title' => t('So Colissimo Simplicité'),
+        'description' => t('Shipping using SOColissimo Simplicité'),
+        'display_title' => t('So Colissimo'),
+        'shipping_method' => 'socolissimo',
+        'price_component' => 'socolissimo_simplicite',
+        'callbacks' => array(
+            'rate' => 'commerce_socolissimo_service_rate',
+//      'details_form' => 'commerce_socolissimo_service_details_form',
+//      'details_form_validate' => 'commerce_socolissimo_service_details_form_validate',
+//      'details_form_submit' => 'commerce_socolissimo_service_details_form_submit',
+        ),
+    );
+
+    return $shipping_services;
+}
+
+/**
+ * Shipping service base price array callback.
+ *
+ * @param object $shipping_service
+ *   the associated service
+ * @param object $order
+ *   the associated order
+ *
+ * @return array
+ *   the base price array
+ */
+function commerce_socolissimo_service_rate($shipping_service, $order) {
+  //TODO provide an administrative UI to set the base price.
+  return array(
+    'amount' => 379,
+    'currency_code' => 'EUR',
+    'data' => array(),
+  );
+}
+
+function commerce_socolissimo_service_details_form($pane_form, $pane_values, $checkout_pane, $order, $shipping_service) {
+   //TODO to be implemented
+    return array();
+
+}
+
+/**
+ * Page callback to perform a POST-based redirection to the SOColissimo page.
+ *
+ * @param $order_number the related order's number.
+ */
+function commerce_socolissimo_frame_redirect_form($order_number) {
+
+    $order = commerce_order_load_by_number($order_number);
+
+    $koUrl = url('socolissimo/return', array('absolute' => TRUE));
+
+    $output = '<form name="socoredir" action="http://ws.colissimo.fr/pudo-fo-frame/storeCall.do?trReturnUrlKo=' . $koUrl . '" method="post">';
+
+
+    $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
+    $line_item = commerce_socolissimo_get_shipping_line_item($order);
+    $line_item_wrapper = entity_metadata_wrapper('commerce_line_item', $line_item);
+    $shipping_address = $order_wrapper->commerce_customer_shipping->commerce_customer_address->value();
+
+    $price = $line_item_wrapper->commerce_unit_price->value();
+    $decimal_price = commerce_currency_amount_to_decimal($price['amount'], $price['currency_code']);
+
+    $params = array(
+        'pudoFOId' => variable_get('socolissimo_socolissimo_simplicite_id', ''),
+        'dyForwardingCharges' => $decimal_price,
+        'orderId' => time(),
+        'trOrderNumber' => $order->order_number,
+        'numVersion' => '3.0',
+        'trReturnUrlOk' => url('socolissimo/return', array('absolute' => TRUE)),
+        'trReturnUrlKo' => $koUrl,
+    );
+
+
+    $params['ceCivility'] = 'MR';
+    $params['ceFirstName'] = $shipping_address['first_name'];
+    $params['ceName'] = $shipping_address['last_name'];
+    $params['ceAdress3'] = $shipping_address['thoroughfare'];
+    $params['ceZipCode'] = $shipping_address['postal_code'];
+    $params['ceTown'] = $shipping_address['locality'];
+    $params['ceEmail'] = $order->mail;
+    $params['cePays'] = $shipping_address['country'];
+
+    if (isset($shipping_address['mobile_number'])) {
+        $params['cePhoneNumber'] = $shipping_address['mobile_number'];
+    }
+
+
+    foreach ($params as $key => $value) {
+        if (!empty($value) || $value === 0) {
+            $output .= '<input type="hidden" name="' . $key . '" value="' . $value . '"/>';
+        }
+    }
+
+    module_load_include('api.inc', 'commerce_socolissimo');
+    $output .= '<input type="hidden" name="signature" value="' . commerce_socolissimo_signature_out($params, variable_get('socolissimo_socolissimo_simplicite_key', '')) . '"/>';
+
+
+    //$output .= '<input type="submit"/></form>';
+
+    $output .= '<script>document.socoredir.submit()</script>';
+
+    print $output;
+    exit;
+
+}
+
+/**
+ * Page callback for SOColissimo API return URL
+ */
+function commerce_socolissimo_return() {
+
+    module_load_include('api.inc', 'commerce_socolissimo');
+    $params = $_REQUEST;
+    $signature = commerce_socolissimo_signature_in($params, variable_get('socolissimo_socolissimo_simplicite_key', ''));
+
+    $order = commerce_order_load_by_number($params['TRORDERNUMBER']);
+    $line_item = commerce_socolissimo_get_shipping_line_item($order);
+    $line_item_wrapper = entity_metadata_wrapper('commerce_line_item', $line_item);
+    $price = $line_item_wrapper->commerce_unit_price->value();
+
+    $existing_tax = 0;
+    foreach ($price['data']['components'] as $component) {
+        if (isset($component['price']['data']['tax_rate']) && $component['price']['data']['tax_rate']['type'] == 'vat') {
+            $existing_tax = $component['price']['data']['tax_rate']['rate'];
+            break;
+        }
+    }
+
+    $price['amount'] = (int)($params['DYFORWARDINGCHARGES'] / (1) * 100);
+    $price['data']['components'][0]['name'] = 'base_price';
+    $line_item_wrapper->commerce_unit_price = $price;
+    commerce_line_item_rebase_unit_price($line_item);
+
+    $price = $line_item_wrapper->commerce_unit_price->value();
+    $price['data']['components'][0]['name'] = 'socolissimo_simplicite';
+    $line_item_wrapper->commerce_unit_price = $price;
+
+    $line_item->data['service_details'] = $params;
+
+    commerce_line_item_save($line_item);
+
+    $target_uri = commerce_checkout_order_uri($order);
+    return drupal_goto($target_uri);
+
+}
+
+function commerce_socolissimo_extract_line_item_point($line_item) {
+    $details = commerce_socolissimo_extract_service_details($line_item);
+    if ($details && !empty($details['socolissimo_info'])) {
+        return $details['socolissimo_info'];
+    }
+}
+
+
+function commerce_socolissimo_extract_service_details($line_item) {
+    $details = array();
+
+    if (isset($line_item->data) && isset($line_item->data['service_details']) &&
+        isset($line_item->data['shipping_service']) &&
+        isset($line_item->data['shipping_service']['shipping_method']) &&
+        $line_item->data['shipping_service']['shipping_method'] == 'socolissimo'
+    ) {
+
+        $details = $line_item->data['service_details'];
+    } else {
+        $details[] = FALSE;
+    }
+
+    return $details;
+}
+
+
+function commerce_socolissimo_get_shipping_line_item($order) {
+    $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
+
+    foreach ($order_wrapper->commerce_line_items as $delta => $line_item_wrapper) {
+        if ($line_item_wrapper->type->value() == 'shipping') {
+            $line_item = $line_item_wrapper->value();
+            $details = commerce_socolissimo_extract_service_details($line_item);
+            if (isset($details)) {
+                return $line_item;
+            }
+        }
+    }
+}
+
+/**
+ * Implements hook_commerce_checkout_page_info()
+ */
+function commerce_socolissimo_commerce_checkout_page_info() {
+    $checkout_pages = array();
+
+    $checkout_pages['socolissimo'] = array(
+        'name' => t('So Colissimo'),
+        'title' => t('So Colissimo'),
+        'weight' => 6,
+        'status_cart' => TRUE,
+        //'buttons' => FALSE,
+    );
+
+    return $checkout_pages;
+}
+
+/**
+ * Implements hook_commerce_checkout_pane_info()
+ */
+function commerce_socolissimo_commerce_checkout_pane_info() {
+    $checkout_panes = array();
+
+    //commerce_checkout_order
+
+    $checkout_panes['commerce_socolissimo_pane'] = array(
+        'title' => t('Adresse de livraison par So Colissimo'),
+        'name' => t('So Colissimo'),
+        'file' => 'includes/commerce_socolissimo_pane.checkout_pane.inc',
+        'page' => 'socolissimo',
+        'bas' => 'commerce_socolissimo_pane',
+        'weight' => 8,
+    );
+
+    return $checkout_panes;
+}
+
+function commerce_socolissimo_block_view_commerce_checkout_progress_indication_alter(&$array, &$block) {
+
+    if (isset($array['content']['#items']['socolissimo'])
+        && $array['content']['#current_page'] != 'socolissimo'
+    ) {
+        unset($array['content']['#items']['socolissimo']);
+    }
+
+}
+
+/**
+ * Implements hook_commerce_checkout_router().
+ */
+function commerce_socolissimo_commerce_checkout_router($order, $checkout_page) {
+    // If the current page is the Express Checkout page but the current order did
+    // not use the Express Checkout flow...
+    if ($checkout_page['prev_page'] == 'socolissimo') {
+
+    }
+
+    if ($checkout_page['page_id'] == 'socolissimo'
+        && ($line_item = commerce_socolissimo_get_shipping_line_item($order))
+        && ($service_details = commerce_socolissimo_extract_service_details($line_item))
+        && !empty($service_details)
+    ) {
+        // Update the order status to the next checkout page.
+        $next_page = $checkout_page['next_page'];
+        $order = commerce_order_status_update($order, 'checkout_' . $next_page, FALSE, FALSE);
+
+        // Inform modules of checkout completion if the next page is Completed.
+        if ($next_page == 'complete') {
+            commerce_checkout_complete($order);
+        }
+
+        // Redirect to the URL for the new checkout page.
+        $target_uri = commerce_checkout_order_uri($order);
+        return drupal_goto($target_uri);
+    }
+
+}
+
+function commerce_socolissimo_field_extra_fields() {
+    $extras = array();
+
+    $extras['commerce_order']['commerce_order']['display']['commerce_socolissimo_details'] = array(
+        'label' => 'So Colissimo details',
+        'weight' => 50,
+    );
+
+    return $extras;
+}
+
+function commerce_socolissimo_entity_view($entity, $type, $view_mode, $langcode) {
+
+    $entity_ids = entity_extract_ids($type, $entity);
+
+    if ($type == 'commerce_order') {
+
+        $line_item = commerce_socolissimo_get_shipping_line_item($entity);
+
+        if ($line_item) {
+
+            $field_name = 'commerce_socolissimo_details';
+
+            $fields = field_extra_fields_get_display($type, $entity_ids[2], $view_mode);
+            if ($fields[$field_name]['visible']) {
+
+
+                $entity->content[$field_name] = array(
+                    '#theme' => 'commerce_socolissimo_details',
+                    '#details' => $line_item->data['service_details'],
+                    '#weight' => $fields[$field_name]['weight'],
+
+                );
+            }
+
+        }
+
+    }
+
+}
+
+// Remove buttons on Socolissmo page
+function commerce_socolissimo_form_alter(&$form, &$form_state, $form_id) {
+    switch ($form_id) {
+        case 'commerce_checkout_form_socolissimo':
+            if (isset($form['buttons'])) {
+                unset($form['buttons']);
+            }
+            break;
+        case 'commerce_checkout_form_review':
+            if (isset($form['buttons']) && $form_state['checkout_page']['prev_page'] == 'socolissimo') {
+                $form_state['checkout_page']['prev_page'] = 'shipping';
+            }
+            break;
+        case 'commerce_checkout_form_shipping':
+            $form["commerce_shipping"]["shipping_service"]["#options"]["socolissimo_simplicite"] .= '<img alt="So Colissimo" class="socolissimo-logo" src="/' . drupal_get_path("module", "commerce_socolissimo") . '/theme/socolissimo.png"/>';
+            break;
+        /*case 'commerce_order_ui_order_form':
+            if(isset($form_state['commerce_order'])){
+            $line_item = commerce_socolissimo_get_shipping_line_item($form_state['commerce_order']);
+            $service_details = commerce_socolissimo_extract_service_details($line_item);
+              if(!empty($service_details)) {
+                  $form_state['so'] = array(
+                      '#theme' => 'commerce_socolissimo_details',
+                      '#details' => $service_details,
+                      '#weight' => '50',
+
+        );
+                  $form['contact'] = array(
+                    '#type' => 'fieldset',
+                    '#title' => t('Contact settings'),
+                    '#weight' => 5,
+                    '#collapsible' => TRUE,
+                    '#collapsed' => FALSE,
+                  );
+               //   $form_state['so'] = render($form_state['so']);
+              }
+            }
+        break;*/
+    }
+}
+
+function commerce_socolissimo_theme() {
+
+    return array(
+        'commerce_socolissimo_info' => array(
+            'render element' => 'element',
+            'path' => drupal_get_path('module', 'commerce_socolissimo') . '/theme',
+            'template' => 'commerce-socolissimo-info',
+        ),
+        'commerce_socolissimo_details' => array(
+            'render element' => 'element',
+            'path' => drupal_get_path('module', 'commerce_socolissimo') . '/theme',
+            'template' => 'commerce-socolissimo-details',
+        ),
+    );
+
+}
+

@@ -1,0 +1,44 @@
+<?php
+
+/**
+ * @file
+ * module's table schema and installation hooks.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function commerce_socolissimo_schema(){
+
+  $schema['commerce_socolissimo_line_item_info'] = array(
+    'description' => 'Stores SoColissmo information associated with a line item.',
+    'fields' => array(
+      'id' => array(
+        'description' => 'The primary identifier for an association.',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'line_item_id' => array(
+        'description' => 'The primary identifier for a line item.',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'shipping_info' => array(
+        'description' => 'The SoColissimo informations.',
+        'type' => 'blob',
+        'serialized' => TRUE,
+        'not null' => TRUE,
+      ),
+    ),
+    'primary key' => array('id'),
+    'indexes' => array(
+      'line_item_id' => array('line_item_id'),
+    )
+  );
+
+  return $schema;
+
+}
